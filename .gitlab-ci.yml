@@ -1,0 +1,12 @@
+# CI for the Go client (go/ subdir module). The Python package currently has no
+# CI job; add one here if/when desired.
+go-ci:
+  image: golang:1.21
+  rules:
+    - changes: [go/**/*]
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+  script:
+    - cd go
+    - test -z "$(gofmt -l .)" || { echo "gofmt: files need formatting"; gofmt -l .; exit 1; }
+    - go vet ./...
+    - go test ./...

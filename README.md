@@ -50,6 +50,14 @@ with FwdClient("http://fwd:8080", caller_token="tok_...") as fwd:
     fwd.report_receipt(signed.tx_id, tx_hash, "mined_success", block_number=12345678)
 ```
 
+## Go client
+
+A Go port of this library — same fwd contract, same keyless boundary — lives in
+[`go/`](go/) (`module gitlab.com/proofs.africa/fwd-client/go`, stdlib only). Its
+`MakeIdempotencyKey` is byte-identical to the Python helper, so Go and Python
+consumers dedup the same logical attempt at fwd. See [`go/README.md`](go/README.md).
+The two clients are released in lockstep from this repo.
+
 ## Keyless by design
 
 `fwd-client` holds no private keys, performs no signing, and has no crypto
