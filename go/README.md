@@ -12,11 +12,12 @@ no third-party dependencies.
 ## Install
 
 ```sh
-go get github.com/africanproofs/fwd-client/go@go/v0.1.0
+go get github.com/africanproofs/fwd-client/go@v0.1.0
 ```
 
-> This is a Go module in the `go/` subdir of the `fwd-client` repo, so version
-> tags are prefixed: `go/vX.Y.Z`. `@latest` resolves the newest `go/v*` tag.
+> This is a Go module in the `go/` subdir of the `fwd-client` repo, so its git
+> tags are prefixed (`go/vX.Y.Z`), but consumers request the plain version —
+> `@v0.1.0` (or `@latest`) — and Go maps it to the matching `go/v*` tag.
 
 ```go
 import fwdclient "github.com/africanproofs/fwd-client/go"
