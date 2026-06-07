@@ -1,6 +1,6 @@
 # fwd-client
 
-Keyless HTTP client for the [fwd](https://gitlab.com/proofs.africa/fwd) signing daemon.
+Keyless HTTP client for the [fwd](https://github.com/africanproofs/fwd) signing daemon.
 
 Tracks the **fwd v1.1.0a9+ zero-egress / sign-only API**: fwd signs and returns
 a raw transaction blob; the caller broadcasts and reports back.  This library is
@@ -53,7 +53,7 @@ with FwdClient("http://fwd:8080", caller_token="tok_...") as fwd:
 ## Go client
 
 A Go port of this library — same fwd contract, same keyless boundary — lives in
-[`go/`](go/) (`module gitlab.com/proofs.africa/fwd-client/go`, stdlib only). Its
+[`go/`](go/) (`module github.com/africanproofs/fwd-client/go`, stdlib only). Its
 `MakeIdempotencyKey` is byte-identical to the Python helper, so Go and Python
 consumers dedup the same logical attempt at fwd. See [`go/README.md`](go/README.md).
 The two clients are released in lockstep from this repo.

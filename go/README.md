@@ -1,6 +1,6 @@
 # fwd-client (Go)
 
-Keyless Go transport client for the [fwd](https://gitlab.com/proofs.africa/fwd)
+Keyless Go transport client for the [fwd](https://github.com/africanproofs/fwd)
 signing daemon — the Go port of the Python `fwd-client`, speaking the same
 **fwd v1.1.0a9+ zero-egress / sign-only** HTTP contract.
 
@@ -12,15 +12,14 @@ no third-party dependencies.
 ## Install
 
 ```sh
-go get gitlab.com/proofs.africa/fwd-client/go@go/v0.1.0
+go get github.com/africanproofs/fwd-client/go@go/v0.1.0
 ```
 
 > This is a Go module in the `go/` subdir of the `fwd-client` repo, so version
 > tags are prefixed: `go/vX.Y.Z`. `@latest` resolves the newest `go/v*` tag.
-> External `go get` requires the repo to be reachable (public, or a mirror).
 
 ```go
-import fwdclient "gitlab.com/proofs.africa/fwd-client/go"
+import fwdclient "github.com/africanproofs/fwd-client/go"
 ```
 
 ## Usage
