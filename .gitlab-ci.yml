@@ -1,5 +1,16 @@
-# CI for the Go client (go/ subdir module). The Python package currently has no
-# CI job; add one here if/when desired.
+# CI for the two clients. Each job is scoped to its own subdir.
+python-ci:
+  image: python:3.12
+  rules:
+    - changes: [python/**/*]
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+  script:
+    - pip install poetry
+    - cd python
+    - poetry install
+    - poetry run ruff check .
+    - poetry run pytest -q
+
 go-ci:
   image: golang:1.21
   rules:

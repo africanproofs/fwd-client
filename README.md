@@ -1,90 +1,34 @@
 # fwd-client
 
-Keyless HTTP client for the [fwd](https://github.com/africanproofs/fwd) signing daemon.
+The one canonical keyless client for the [fwd](https://github.com/africanproofs/fwd) signing
+daemon — pure transport: **no keys, no crypto, no broadcast**. fwd signs and returns a raw
+transaction blob; the caller broadcasts it and reports the outcome back.
 
-Tracks the **fwd v1.1.0a9+ zero-egress / sign-only API**: fwd signs and returns
-a raw transaction blob; the caller broadcasts and reports back.  This library is
-pure HTTP transport — no crypto, no calldata, no broadcast logic.
+Two implementations of the same fwd contract, in dedicated folders:
 
-## Install
+- **[`python/`](python/)** — Python 3.12 package (`fwd_client`), httpx + pydantic. See [`python/README.md`](python/README.md).
+- **[`go/`](go/)** — Go module (`github.com/africanproofs/fwd-client/go`), stdlib only. See [`go/README.md`](go/README.md).
 
-```
-pip install fwd-client
-```
-
-Or with Poetry:
-
-```
-poetry add fwd-client
-```
-
-**No crypto dependencies.** The only runtime deps are `httpx` and `pydantic` (v2).
-
-## Usage
-
-```python
-from fwd_client import FwdClient, FwdRetryableError, FwdTerminalError, make_idempotency_key
-
-idem_key = make_idempotency_key("my-app", "claim", "flare", "1234")
-
-with FwdClient("http://fwd:8080", caller_token="tok_...") as fwd:
-    # 1. Sign (fwd allocates nonce; you supply gas params)
-    signed = fwd.sign_transaction(
-        wallet="my-wallet",
-        chain=14,
-        to="0x...",
-        gas=200_000,
-        max_fee_per_gas=50_000_000_000,
-        max_priority_fee_per_gas=1_000_000_000,
-        data="0xcafe...",
-        idempotency_key=idem_key,
-    )
-
-    # 2. Broadcast yourself (signed.signed_raw_tx -> eth_sendRawTransaction)
-    tx_hash = my_rpc.send_raw_transaction(signed.signed_raw_tx)
-
-    # 3. Report broadcast result to fwd
-    fwd.report_broadcast_result(signed.tx_id, tx_hash, "accepted")
-
-    # 4. After mining, report the receipt
-    fwd.report_receipt(signed.tx_id, tx_hash, "mined_success", block_number=12345678)
-```
-
-## Go client
-
-A Go port of this library — same fwd contract, same keyless boundary — lives in
-[`go/`](go/) (`module github.com/africanproofs/fwd-client/go`, stdlib only). Its
-`MakeIdempotencyKey` is byte-identical to the Python helper, so Go and Python
-consumers dedup the same logical attempt at fwd. See [`go/README.md`](go/README.md).
-The two clients are released in lockstep from this repo.
+Both track the same fwd API and expose an idempotency-key helper
+(`make_idempotency_key` / `MakeIdempotencyKey`) that produces **byte-identical** keys, so a
+Go consumer and a Python consumer dedup the same logical attempt at fwd.
 
 ## Keyless by design
 
-`fwd-client` holds no private keys, performs no signing, and has no crypto
-dependencies.  All signing happens inside the fwd daemon.
+`fwd-client` holds no private keys, performs no signing, and has no crypto dependencies.
+All signing happens inside the fwd daemon; broadcasting and chain reads stay in each consumer.
 
-## Error handling
+## Contract
 
-```python
-from fwd_client import FwdTerminalError, FwdRetryableError
+fwd owns the HTTP contract (`sign-transaction`, `sign-fsp-message`, the
+`broadcast-result`/`receipt` report-back loop, `transactions/{id}`, `healthz`); this repo is
+its client mirror. Error taxonomy: **terminal** = 400/401/403/404/422 and most 409s (and any
+unmapped status — fail closed); **retryable** = 503, transport errors, and the 409
+`idempotent_replay` code.
 
-try:
-    signed = fwd.sign_transaction(...)
-except FwdRetryableError:
-    # fwd is down or restarting — back off and retry
-    ...
-except FwdTerminalError:
-    # auth/policy/wallet failure — do not retry; alert operator
-    ...
-```
+## Releases
 
-Status taxonomy (fwd v1.1.0a9+):
+- Python → tag `vX.Y.Z`; consumed as a git dep with `subdirectory = "python"`.
+- Go → tag `go/vX.Y.Z` (Go subdir-module convention); consumers use `@vX.Y.Z`.
 
-| Status | Class |
-|--------|-------|
-| 400, 401, 403, 404, 409, 422 | `FwdTerminalError` |
-| 503 | `FwdRetryableError` |
-| transport error (no response) | `FwdRetryableError` |
-| any other status | `FwdTerminalError` (fail closed) |
-
-Note: 502 is gone — fwd no longer performs any RPC calls.
+Current: **v0.1.1**.

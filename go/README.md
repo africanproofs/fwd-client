@@ -12,7 +12,7 @@ no third-party dependencies.
 ## Install
 
 ```sh
-go get github.com/africanproofs/fwd-client/go@v0.1.0
+go get github.com/africanproofs/fwd-client/go@v0.1.1
 ```
 
 > This is a Go module in the `go/` subdir of the `fwd-client` repo, so its git
@@ -70,7 +70,7 @@ bad request, state conflict). Retryable: 503, network/transport errors, and the
 
 ## Parity
 
-Mirrors the Python `fwd-client` v0.1.0 surface (6 caller methods + the generic
+Mirrors the Python `fwd-client` v0.1.1 surface (6 caller methods + the generic
 `MakeIdempotencyKey`). `MakeIdempotencyKey` is byte-identical to the Python
 helper, so a Go consumer and a Python consumer (clif) dedup the same logical
 attempt at fwd. `sign-replacement` is intentionally omitted (not in the Python

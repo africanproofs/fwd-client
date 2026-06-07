@@ -41,9 +41,9 @@ a hunt across every consumer. Version it forward; pin consumers to a tag.
 
 ## Stack
 
-Python 3.12 · Poetry · httpx · Pydantic v2. `fwd_client/`: `client`, `errors`,
-`models`, `idempotency`. `tests/` (httpx-mocked; ported from clif). ruff + mypy
-clean.
+Python 3.12 · Poetry · httpx · Pydantic v2, in `python/`. `python/fwd_client/`: `client`,
+`errors`, `models`, `idempotency`. `python/tests/` (httpx-mocked; ported from clif). ruff +
+mypy clean. A stdlib-only Go port lives in `go/` (same contract; tagged `go/vX.Y.Z`).
 
 ## Consumed by
 
