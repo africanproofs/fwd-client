@@ -9,7 +9,7 @@ Public API::
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from fwd_client.client import FwdClient
 from fwd_client.errors import FwdError, FwdRetryableError, FwdTerminalError, raise_for_fwd_error
