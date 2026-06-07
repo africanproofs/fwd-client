@@ -407,3 +407,27 @@ def test_idempotency_key_retry_discriminator() -> None:
     assert r1a != base  # retry discriminates from no-retry
     assert r1a != r2  # different retry value = fresh key
     assert len(r2) <= 128
+
+
+def test_idempotency_key_golden_parity() -> None:
+    """Byte-identical to the golden vectors pinned in go/idempotency_test.go.
+
+    Cross-language parity gate (CLAUDE.md invariant 3): a Go consumer and a
+    Python consumer (clif) dedup the same logical attempt at fwd only if both
+    languages emit the same key for the same (parts, retry). These literals are
+    duplicated verbatim in both suites so a drift in EITHER language fails its
+    own tests.
+    """
+    assert make_idempotency_key("clif", "songbird", "2", "404") == "clif:songbird:2:404-c881a5983a4d9488"
+    assert (
+        make_idempotency_key("clif", "songbird", "2", "404", retry="r2")
+        == "clif:songbird:2:404:retry=r2-09dc2f33c4c26a1c"
+    )
+    assert make_idempotency_key("a", "b") == "a:b-6783a31eabf68ccc"
+    assert make_idempotency_key("with space", "x") == "with_space:x-3dd10fc2bfebffda"
+    assert make_idempotency_key("only") == "only-f905b19542ed08c9"
+    long_parts = [f"seg{i:02d}" for i in range(30)]
+    assert make_idempotency_key(*long_parts) == (
+        "seg00:seg01:seg02:seg03:seg04:seg05:seg06:seg07:seg08:seg09:"
+        "seg10:seg11:seg12:se-193f16a1387c3d78"
+    )
