@@ -31,4 +31,4 @@ unmapped status — fail closed); **retryable** = 503, transport errors, and the
 - Python → tag `vX.Y.Z`; consumed as a git dep with `subdirectory = "python"`.
 - Go → tag `go/vX.Y.Z` (Go subdir-module convention); consumers use `@vX.Y.Z`.
 
-Current: **v0.1.1**.
+Current: **v0.1.2** (Python; Go unchanged at `go/v0.1.1`). v0.1.2 fixes the Python error-envelope parser to read the nested `detail.error` (`error_code` was always `"unknown"` before).

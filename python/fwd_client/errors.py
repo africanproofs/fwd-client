@@ -39,6 +39,8 @@ _409_TERMINAL: frozenset[str] = frozenset({
     "nonce_not_initialized",   # operator must run clifwd nonce-init
     "illegal_transition",      # true state-machine conflict
     "hash_mismatch",           # data integrity violation
+    "tx_hash_mismatch",        # report hash does not match what fwd signed
+    "idempotency_conflict",    # same key, different body (a caller may choose to treat as already-submitted)
 })
 
 # Synthetic status for transport errors (no HTTP response received).
@@ -63,6 +65,41 @@ class FwdRetryableError(FwdError):
     """May retry after backoff — fwd is down, restarting, or overloaded."""
 
 
+def _parse_envelope(response: httpx.Response) -> tuple[str, str]:
+    """Extract (error_code, message) from a fwd error body — byte-for-byte taxonomy
+    parity with the Go ``parseEnvelope``.
+
+    fwd renders errors via FastAPI's HTTPException, so the real wire shape is
+    NESTED: ``{"detail": {"error": "<code>", "message": "<msg>"}}``. Reading the
+    top level alone (the pre-v0.1.2 bug) always saw ``"unknown"``. This handles:
+      - the nested detail-object (the real fwd error wire),
+      - a detail-STRING shape (e.g. the 503 ``/healthz`` degraded body),
+      - a FastAPI auto-validation detail-LIST 422 (falls back to "unknown"),
+      - a flat ``{"error","message"}`` shape (defensive),
+    and falls back to ("unknown", raw text) for non-JSON / shapeless bodies.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return "unknown", response.text
+    code, msg = "", ""
+    if isinstance(body, dict):
+        code = str(body.get("error") or "")
+        msg = str(body.get("message") or "")
+        detail = body.get("detail")
+        if isinstance(detail, dict):
+            d_err = str(detail.get("error") or "")
+            if d_err:
+                code, msg = d_err, str(detail.get("message") or "")
+        elif isinstance(detail, str) and detail and not msg:
+            msg = detail
+    if not code:
+        code = "unknown"
+    if not msg:
+        msg = response.text
+    return code, msg
+
+
 def raise_for_fwd_error(response: httpx.Response) -> None:
     """Inspect *response* and raise the appropriate FwdError subclass.
 
@@ -73,15 +110,14 @@ def raise_for_fwd_error(response: httpx.Response) -> None:
     409 is split by error_code (FWD-CLIENT-ERRORTAX-007):
     - idempotent_replay → FwdRetryableError (transparent replay, not a fault)
     - all others → FwdTerminalError (operator action needed)
+
+    error_code is parsed from the NESTED FastAPI envelope (``detail.error``), so
+    callers may reliably branch on it (e.g. clif treats ``idempotency_conflict``
+    as already-submitted). Before v0.1.2 it was always ``"unknown"``.
     """
     if response.status_code == 200:
         return
-    try:
-        body = response.json()
-        err = str(body.get("error", "unknown"))
-        msg = str(body.get("message", response.text))
-    except ValueError:
-        err, msg = "unknown", response.text
+    err, msg = _parse_envelope(response)
     if response.status_code in _RETRYABLE_STATUSES:
         raise FwdRetryableError(response.status_code, err, msg)
     if response.status_code == 409:

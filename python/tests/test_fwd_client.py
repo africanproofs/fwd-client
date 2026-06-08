@@ -139,7 +139,8 @@ def test_sign_transaction_idempotency_key_header() -> None:
 )
 def test_sign_transaction_terminal_statuses(code: int, err: str) -> None:
     def h(_req: httpx.Request) -> httpx.Response:
-        return httpx.Response(code, json={"error": err, "message": "nope"})
+        # Real fwd wire = nested FastAPI HTTPException envelope (detail.error).
+        return httpx.Response(code, json={"detail": {"error": err, "message": "nope"}})
 
     with _client(h) as fwd:
         with pytest.raises(FwdTerminalError) as ei:
@@ -240,6 +241,63 @@ def test_transport_error_is_retryable_status_path() -> None:
     with _raising_client(httpx.ConnectError("down")) as fwd:
         with pytest.raises(FwdRetryableError):
             fwd.get_transaction("019e-abc")
+
+
+# ---- raise_for_fwd_error: envelope parsing + classification parity with Go ----
+
+
+@pytest.mark.parametrize(
+    "status,body,want_code,retryable",
+    [
+        # Nested HTTPException envelope ({"detail":{"error","message"}}) — the REAL fwd wire.
+        (403, {"detail": {"error": "policy_denied", "message": "nope"}}, "policy_denied", False),
+        (404, {"detail": {"error": "transaction_not_found"}}, "transaction_not_found", False),
+        (422, {"detail": {"error": "fsp_message_malformed", "message": "bad"}}, "fsp_message_malformed", False),
+        (409, {"detail": {"error": "idempotency_conflict", "message": "x"}}, "idempotency_conflict", False),
+        (409, {"detail": {"error": "illegal_transition"}}, "illegal_transition", False),
+        (409, {"detail": {"error": "idempotent_replay"}}, "idempotent_replay", True),
+        (503, {"detail": {"error": "vault_unavailable", "message": "sealed master"}}, "vault_unavailable", True),
+        # /healthz 503 uses a detail-STRING shape, not the error-object.
+        (503, {"status": "degraded", "detail": "sealed master unavailable"}, "unknown", True),
+        # FastAPI auto-validation 422 uses a detail-LIST; falls back to unknown, still terminal.
+        (422, {"detail": [{"loc": ["body", "wallet"], "msg": "field required"}]}, "unknown", False),
+        # Flat envelope fallback (defensive).
+        (400, {"error": "bad_idempotency_key", "message": "too long"}, "bad_idempotency_key", False),
+        (401, {"detail": {"error": "unauthorized", "message": "missing bearer token"}}, "unauthorized", False),
+        # Unmapped status fails closed (terminal).
+        (418, {"detail": {"error": "teapot"}}, "teapot", False),
+    ],
+)
+def test_raise_for_fwd_error_envelope_parity(status, body, want_code, retryable) -> None:
+    """Golden parity with go/errors_test.go: (error_code, retryable) must match for
+    every wire shape — proves the nested detail.error is parsed (the v0.1.2 fix)."""
+    from fwd_client.errors import raise_for_fwd_error
+
+    resp = httpx.Response(status, json=body)
+    with pytest.raises(FwdRetryableError if retryable else FwdTerminalError) as ei:
+        raise_for_fwd_error(resp)
+    assert ei.value.status == status
+    assert ei.value.error_code == want_code
+
+
+def test_raise_for_fwd_error_non_json_fails_closed() -> None:
+    """Non-JSON body → ("unknown", raw text), terminal (parity with Go 500 case)."""
+    from fwd_client.errors import raise_for_fwd_error
+
+    with pytest.raises(FwdTerminalError) as ei:
+        raise_for_fwd_error(httpx.Response(500, text="oops"))
+    assert ei.value.error_code == "unknown" and ei.value.message == "oops"
+
+
+def test_raise_for_fwd_error_idempotency_conflict_code_is_reliable() -> None:
+    """The headline v0.1.2 fix: a 409 idempotency_conflict surfaces its real code
+    (was always "unknown"), so clif can branch on it to treat as already-submitted."""
+    from fwd_client.errors import raise_for_fwd_error
+
+    resp = httpx.Response(409, json={"detail": {"error": "idempotency_conflict", "message": "reused"}})
+    with pytest.raises(FwdTerminalError) as ei:
+        raise_for_fwd_error(resp)
+    assert ei.value.error_code == "idempotency_conflict"
 
 
 # ---- sign_transaction: 409 surfaces clearly ----

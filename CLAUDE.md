@@ -95,8 +95,11 @@ not exposed** in either client — add it only when a consumer needs stuck-tx re
   `poetry lock --no-update` (it keeps the already-locked commit) — the consumer must run
   `poetry update fwd-client` (or clear Poetry's git cache) to repoint. Prefer cutting a new
   patch over moving a tag.
-- Current: **v0.1.1** (the symmetric `python/` + `go/` layout). `v0.1.0` / `go/v0.1.0` are the
-  legacy root-layout release; old pins still resolve.
+- Current: **v0.1.2** (Python; Go unchanged at `go/v0.1.1`). v0.1.2 fixes the Python error-envelope
+  parser to read the nested FastAPI `detail.error` — `FwdError.error_code` was always `"unknown"`
+  before (Go already parsed it); a golden parity test now pins Python↔Go classification. The
+  symmetric `python/` + `go/` layout; `v0.1.0` / `go/v0.1.0` are the legacy root-layout release;
+  old pins still resolve.
 
 ## CI
 
