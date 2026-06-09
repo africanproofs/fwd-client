@@ -13,7 +13,8 @@
   `poetry.lock`, `README.md`.
 - **`go/`** — module `github.com/africanproofs/fwd-client/go` (**stdlib only**). `client.go`,
   `errors.go`, `models.go`, `idempotency.go`, `*_test.go`, `README.md`.
-- **root** — overview `README.md`, this `CLAUDE.md`, `.gitlab-ci.yml` (one CI job per language).
+- **root** — overview `README.md`, this `CLAUDE.md`, `.github/workflows/ci.yml` (the effective CI,
+  one job per language; a legacy `.gitlab-ci.yml` is inert on the github-only remote).
 
 The two folders are equal and self-contained. The same fwd contract, mirrored in each idiom.
 
@@ -47,12 +48,10 @@ The two folders are equal and self-contained. The same fwd contract, mirrored in
 
 5. **fwd's error body is nested** under `detail`: `{"detail": {"error": "<code>", "message":
    "<msg>"}}` (FastAPI's default `HTTPException` rendering — confirmed by fwd's own tests).
-   Parse `detail.error`. The Go client does (`parseEnvelope`). **Known gap:** Python's
-   `raise_for_fwd_error` reads top-level `body.get("error")`, so it sees `"unknown"` for the
-   code. This is harmless today — classification is status-driven, and every real fwd 409
-   except the (200-cached, never-a-409) `idempotent_replay` is terminal regardless — but it is
-   a real diagnostic gap; fix it to read `detail.error` (fall back to top-level) when the file
-   is next touched.
+   Parse `detail.error` first and fall back to the historical top-level `error`
+   shape only for compatibility. Python `v0.1.2` and Go both surface the real
+   fwd error code; a client that reads only top-level `body["error"]` regresses
+   to `"unknown"` and breaks consumers that need a narrow code-specific recovery.
 
 6. **Contract lockstep.** fwd owns the HTTP contract; both clients mirror it. A fwd contract
    change (endpoint, request/response model, error taxonomy, or idempotency algorithm) updates
@@ -95,13 +94,16 @@ not exposed** in either client — add it only when a consumer needs stuck-tx re
   `poetry lock --no-update` (it keeps the already-locked commit) — the consumer must run
   `poetry update fwd-client` (or clear Poetry's git cache) to repoint. Prefer cutting a new
   patch over moving a tag.
-- Current: **v0.1.2** (Python; Go unchanged at `go/v0.1.1`). v0.1.2 fixes the Python error-envelope
-  parser to read the nested FastAPI `detail.error` — `FwdError.error_code` was always `"unknown"`
-  before (Go already parsed it); a golden parity test now pins Python↔Go classification. The
-  symmetric `python/` + `go/` layout; `v0.1.0` / `go/v0.1.0` are the legacy root-layout release;
-  old pins still resolve.
+- Current: **v0.1.3** (Python + Go in lockstep: tags `v0.1.3` + `go/v0.1.3`). v0.1.3 makes Python
+  `health()` use the fwd taxonomy (a degraded daemon's 503 now raises `FwdRetryableError`, not a raw
+  `httpx.HTTPStatusError` — parity with Go `Health()`) and adds the effective GitHub Actions CI. The
+  prior **v0.1.2** fixed the Python error-envelope parser to read the nested `detail.error`
+  (`FwdError.error_code` was always `"unknown"`; Go already parsed it) with a golden Python↔Go parity
+  test; `v0.1.0` / `go/v0.1.0` are the legacy root-layout release; old pins still resolve.
 
 ## CI
 
-`.gitlab-ci.yml`: `python-ci` (`poetry install` + `ruff` + `pytest`, scoped to `python/**`) and
-`go-ci` (`gofmt` + `go vet` + `go test`, scoped to `go/**`).
+`.github/workflows/ci.yml` (GitHub Actions — the repo is github-hosted, so the legacy `.gitlab-ci.yml`
+is inert on the remote): a **`python`** job (`poetry install` + `ruff` + `pytest`, `working-directory:
+python`) and a **`go`** job (`gofmt -l` + `go vet` + `go test`, `working-directory: go`). One job per
+language, run on every push + PR.

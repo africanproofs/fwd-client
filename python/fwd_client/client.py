@@ -283,5 +283,8 @@ class FwdClient:
             resp = self._client.get(f"{self._base}/healthz")
         except httpx.RequestError as exc:
             raise transport_retryable(exc) from exc
-        resp.raise_for_status()
+        # Use the fwd taxonomy (not httpx's raise_for_status): a degraded daemon
+        # returns 503 → FwdRetryableError, matching every other method + the Go
+        # Health(). Otherwise a caller would catch a raw httpx.HTTPStatusError here.
+        raise_for_fwd_error(resp)
         return Health.model_validate(resp.json())

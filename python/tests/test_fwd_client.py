@@ -300,6 +300,31 @@ def test_raise_for_fwd_error_idempotency_conflict_code_is_reliable() -> None:
     assert ei.value.error_code == "idempotency_conflict"
 
 
+# ---- health() taxonomy ----
+
+
+def test_health_ok_200_parses() -> None:
+    def h(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"master": "ok", "fwd": "ok"})
+
+    with _client(h) as fwd:
+        hz = fwd.health()
+    assert hz.model_dump().get("master") == "ok"
+
+
+def test_health_503_is_retryable_not_raw_httpx() -> None:
+    """The v0.1.3 fix: a degraded daemon (503, detail-string body) raises
+    FwdRetryableError, not a raw httpx.HTTPStatusError (parity with Go Health())."""
+
+    def h(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"status": "degraded", "detail": "sealed master unavailable"})
+
+    with _client(h) as fwd:
+        with pytest.raises(FwdRetryableError) as ei:
+            fwd.health()
+    assert ei.value.status == 503
+
+
 # ---- sign_transaction: 409 surfaces clearly ----
 
 
