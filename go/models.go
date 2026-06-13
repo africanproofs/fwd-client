@@ -1,13 +1,25 @@
 package fwdclient
 
+import "math/big"
+
 // Wire models for the fwd v1.1.0a9+ sign-only HTTP API. Field names/json tags
 // mirror the fwd wire contract exactly (snake_case). No consumer-specific types
 // (claim types, reward data, etc.) live here — those belong in the consumer.
 
 // FSP message types accepted by POST /v1/sign-fsp-message.
 const (
-	MessageTypeUptime  = "UPTIME"
-	MessageTypeRewards = "REWARD_DISTRIBUTION"
+	MessageTypeUptime            = "UPTIME"
+	MessageTypeRewards           = "REWARD_DISTRIBUTION"
+	MessageTypeSigningPolicy     = "SIGNING_POLICY"
+	MessageTypeVoterRegistration = "VOTER_REGISTRATION"
+	MessageTypeProtocolPayload   = "PROTOCOL_PAYLOAD"
+	MessageTypeFastUpdate        = "FAST_UPDATE"
+)
+
+// Voter-registration variants (VOTER_REGISTRATION.RegistrationVariant).
+const (
+	RegistrationVariantLegacy      = "legacy"
+	RegistrationVariantChainScoped = "chain_scoped"
 )
 
 // SignTransactionRequest is the POST /v1/sign-transaction body. fwd allocates
@@ -34,17 +46,43 @@ type SignTransactionResponse struct {
 	Nonce       uint64 `json:"nonce"`
 }
 
-// SignFspMessageRequest is the POST /v1/sign-fsp-message body. For UPTIME,
-// ChainID/NoOfWeightBasedClaims/RewardsHash must all be nil; for
-// REWARD_DISTRIBUTION all three are required (omitempty + pointers so they are
-// absent on the wire for UPTIME, matching the Python client).
+// SignFspMessageRequest is the POST /v1/sign-fsp-message body. fwd reconstructs
+// the messageHash from these typed fields and signs (EIP-191). Per message_type
+// the per-field shape mirrors fwd's @model_validator (see SignFspMessage /
+// validateFsp): every optional field is a pointer with omitempty so it is absent
+// on the wire when unset, matching the Python client and fwd's
+// "<TYPE> does not accept <field>" rules.
+//
+//   - UPTIME              — only RewardEpochID.
+//   - REWARD_DISTRIBUTION — ChainID, NoOfWeightBasedClaims, RewardsHash.
+//   - SIGNING_POLICY      — SigningPolicy.
+//   - VOTER_REGISTRATION  — Address + RegistrationVariant ("legacy" |
+//     "chain_scoped"); chain_scoped also requires ChainID, legacy forbids it.
+//   - PROTOCOL_PAYLOAD    — Payload (ProtocolID optional).
+//   - FAST_UPDATE         — BlockNumber, Replicate, GammaX, GammaY, C, S, Deltas.
+//
+// BlockNumber / Replicate / GammaX / GammaY / C / S are uint256 on the wire, so
+// they are *big.Int (arbitrary precision) — encoding/json renders a big.Int as a
+// JSON number. Address, SigningPolicy, Payload and Deltas are 0x-prefixed hex.
 type SignFspMessageRequest struct {
-	Wallet                string  `json:"wallet"`
-	MessageType           string  `json:"message_type"`
-	RewardEpochID         uint64  `json:"reward_epoch_id"`
-	ChainID               *int    `json:"chain_id,omitempty"`
-	NoOfWeightBasedClaims *int    `json:"no_of_weight_based_claims,omitempty"`
-	RewardsHash           *string `json:"rewards_hash,omitempty"`
+	Wallet                string   `json:"wallet"`
+	MessageType           string   `json:"message_type"`
+	RewardEpochID         uint64   `json:"reward_epoch_id"`
+	ChainID               *int     `json:"chain_id,omitempty"`
+	NoOfWeightBasedClaims *int     `json:"no_of_weight_based_claims,omitempty"`
+	RewardsHash           *string  `json:"rewards_hash,omitempty"`
+	Address               *string  `json:"address,omitempty"`
+	SigningPolicy         *string  `json:"signing_policy,omitempty"`
+	Payload               *string  `json:"payload,omitempty"`
+	ProtocolID            *int     `json:"protocol_id,omitempty"`
+	RegistrationVariant   *string  `json:"registration_variant,omitempty"`
+	BlockNumber           *big.Int `json:"block_number,omitempty"`
+	Replicate             *big.Int `json:"replicate,omitempty"`
+	GammaX                *big.Int `json:"gamma_x,omitempty"`
+	GammaY                *big.Int `json:"gamma_y,omitempty"`
+	C                     *big.Int `json:"c,omitempty"`
+	S                     *big.Int `json:"s,omitempty"`
+	Deltas                *string  `json:"deltas,omitempty"`
 }
 
 // SignFspMessageResponse is the 200 body (Leg-1 FSP signing). V is the recovery

@@ -15,7 +15,10 @@ import (
 
 const defaultTimeout = 60 * time.Second
 
-var rewardsHashRe = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
+var (
+	rewardsHashRe = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
+	addrRe        = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+)
 
 // Client is a synchronous, keyless HTTP transport for the fwd signing daemon.
 // It is safe for concurrent use by multiple goroutines (it wraps an *http.Client).
@@ -121,11 +124,13 @@ func (c *Client) SignTransaction(ctx context.Context, req SignTransactionRequest
 	return &out, nil
 }
 
-// SignFspMessage signs an FSP protocol message (Leg-1: UPTIME or
-// REWARD_DISTRIBUTION). Cross-field validation fires BEFORE any HTTP call
-// (returns a plain error, not an *Error): UPTIME requires ChainID/
-// NoOfWeightBasedClaims/RewardsHash to be nil; REWARD_DISTRIBUTION requires all
-// three (RewardsHash matching ^0x[0-9a-fA-F]{64}$).
+// SignFspMessage signs an FSP protocol message (UPTIME, REWARD_DISTRIBUTION,
+// SIGNING_POLICY, VOTER_REGISTRATION, PROTOCOL_PAYLOAD, or FAST_UPDATE).
+// Cross-field validation mirrors fwd's @model_validator and fires BEFORE any
+// HTTP call (returns a plain error, not an *Error), rejecting malformed shapes:
+// each type's required fields must be set and the fields that type forbids must
+// be nil. RewardsHash must match ^0x[0-9a-fA-F]{64}$ and Address must match
+// ^0x[0-9a-fA-F]{40}$.
 func (c *Client) SignFspMessage(ctx context.Context, req SignFspMessageRequest, idempotencyKey string) (*SignFspMessageResponse, error) {
 	if err := validateFsp(req); err != nil {
 		return nil, err
@@ -138,21 +143,79 @@ func (c *Client) SignFspMessage(ctx context.Context, req SignFspMessageRequest, 
 }
 
 func validateFsp(req SignFspMessageRequest) error {
-	hasRD := req.ChainID != nil || req.NoOfWeightBasedClaims != nil || req.RewardsHash != nil
+	// FAST_UPDATE fields, grouped for the "must all be set" / "must all be nil"
+	// checks (mirrors fwd's _fast_update_fields tuple).
+	hasFastUpdate := req.BlockNumber != nil || req.Replicate != nil ||
+		req.GammaX != nil || req.GammaY != nil || req.C != nil ||
+		req.S != nil || req.Deltas != nil
 	switch req.MessageType {
 	case MessageTypeUptime:
-		if hasRD {
-			return fmt.Errorf("fwdclient: UPTIME: chain_id / no_of_weight_based_claims / rewards_hash must all be nil")
+		if req.ChainID != nil || req.NoOfWeightBasedClaims != nil || req.RewardsHash != nil ||
+			req.Address != nil || req.SigningPolicy != nil || req.Payload != nil ||
+			req.ProtocolID != nil || req.RegistrationVariant != nil || hasFastUpdate {
+			return fmt.Errorf("fwdclient: UPTIME takes only reward_epoch_id")
 		}
 	case MessageTypeRewards:
 		if req.ChainID == nil || req.NoOfWeightBasedClaims == nil || req.RewardsHash == nil {
-			return fmt.Errorf("fwdclient: REWARD_DISTRIBUTION: chain_id, no_of_weight_based_claims, and rewards_hash are all required")
+			return fmt.Errorf("fwdclient: REWARD_DISTRIBUTION requires chain_id, no_of_weight_based_claims, rewards_hash")
 		}
 		if !rewardsHashRe.MatchString(*req.RewardsHash) {
 			return fmt.Errorf("fwdclient: rewards_hash must match ^0x[0-9a-fA-F]{64}$, got %q", *req.RewardsHash)
 		}
+		if req.Address != nil || req.SigningPolicy != nil || req.Payload != nil ||
+			req.ProtocolID != nil || req.RegistrationVariant != nil || hasFastUpdate {
+			return fmt.Errorf("fwdclient: REWARD_DISTRIBUTION does not accept address/signing_policy/payload/protocol_id/registration_variant/fast_update fields")
+		}
+	case MessageTypeSigningPolicy:
+		if req.SigningPolicy == nil {
+			return fmt.Errorf("fwdclient: SIGNING_POLICY requires signing_policy")
+		}
+		if req.ChainID != nil || req.Address != nil || req.NoOfWeightBasedClaims != nil ||
+			req.RewardsHash != nil || req.Payload != nil || req.ProtocolID != nil ||
+			req.RegistrationVariant != nil || hasFastUpdate {
+			return fmt.Errorf("fwdclient: SIGNING_POLICY does not accept chain_id/address/reward/payload/protocol_id/registration_variant/fast_update fields")
+		}
+	case MessageTypeVoterRegistration:
+		if req.Address == nil {
+			return fmt.Errorf("fwdclient: VOTER_REGISTRATION requires address")
+		}
+		if !addrRe.MatchString(*req.Address) {
+			return fmt.Errorf("fwdclient: address must match ^0x[0-9a-fA-F]{40}$, got %q", *req.Address)
+		}
+		if req.RegistrationVariant == nil ||
+			(*req.RegistrationVariant != RegistrationVariantLegacy && *req.RegistrationVariant != RegistrationVariantChainScoped) {
+			return fmt.Errorf("fwdclient: VOTER_REGISTRATION requires registration_variant: legacy or chain_scoped")
+		}
+		if *req.RegistrationVariant == RegistrationVariantChainScoped && req.ChainID == nil {
+			return fmt.Errorf("fwdclient: VOTER_REGISTRATION chain_scoped requires chain_id")
+		}
+		if *req.RegistrationVariant == RegistrationVariantLegacy && req.ChainID != nil {
+			return fmt.Errorf("fwdclient: VOTER_REGISTRATION legacy must not include chain_id")
+		}
+		if req.NoOfWeightBasedClaims != nil || req.RewardsHash != nil || req.SigningPolicy != nil ||
+			req.Payload != nil || req.ProtocolID != nil || hasFastUpdate {
+			return fmt.Errorf("fwdclient: VOTER_REGISTRATION does not accept reward fields, signing_policy, payload, protocol_id, or fast_update fields")
+		}
+	case MessageTypeProtocolPayload:
+		if req.Payload == nil {
+			return fmt.Errorf("fwdclient: PROTOCOL_PAYLOAD requires payload")
+		}
+		if req.Address != nil || req.NoOfWeightBasedClaims != nil || req.RewardsHash != nil ||
+			req.SigningPolicy != nil || req.RegistrationVariant != nil || hasFastUpdate {
+			return fmt.Errorf("fwdclient: PROTOCOL_PAYLOAD does not accept address/reward/signing_policy/registration_variant/fast_update fields")
+		}
+	case MessageTypeFastUpdate:
+		if req.BlockNumber == nil || req.Replicate == nil || req.GammaX == nil ||
+			req.GammaY == nil || req.C == nil || req.S == nil || req.Deltas == nil {
+			return fmt.Errorf("fwdclient: FAST_UPDATE requires block_number, replicate, gamma_x, gamma_y, c, s, deltas")
+		}
+		if req.NoOfWeightBasedClaims != nil || req.RewardsHash != nil || req.Address != nil ||
+			req.SigningPolicy != nil || req.Payload != nil || req.ProtocolID != nil ||
+			req.RegistrationVariant != nil {
+			return fmt.Errorf("fwdclient: FAST_UPDATE does not accept reward/address/signing_policy/payload/protocol_id/registration_variant fields")
+		}
 	default:
-		return fmt.Errorf("fwdclient: unknown message_type %q; expected UPTIME or REWARD_DISTRIBUTION", req.MessageType)
+		return fmt.Errorf("fwdclient: unknown message_type %q; expected UPTIME, REWARD_DISTRIBUTION, SIGNING_POLICY, VOTER_REGISTRATION, PROTOCOL_PAYLOAD, or FAST_UPDATE", req.MessageType)
 	}
 	return nil
 }

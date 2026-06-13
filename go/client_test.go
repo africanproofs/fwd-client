@@ -1,9 +1,11 @@
 package fwdclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -125,17 +127,147 @@ func TestSignFspMessageRewardDistribution(t *testing.T) {
 	}
 }
 
+func TestSignFspMessageSigningPolicy(t *testing.T) {
+	c, cap := newServer(t, 200, `{"message_hash":"0xmh","v":27,"r":"0xr","s":"0xs","signature":"0xsig"}`)
+	sp := "0x" + repeat("ab", 40)
+	_, err := c.SignFspMessage(context.Background(), SignFspMessageRequest{
+		Wallet: "fsp-signing-songbird", MessageType: MessageTypeSigningPolicy, RewardEpochID: 405,
+		SigningPolicy: &sp,
+	}, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cap.body["message_type"] != "SIGNING_POLICY" || cap.body["signing_policy"] != sp {
+		t.Errorf("SIGNING_POLICY body wrong: %+v", cap.body)
+	}
+	// Forbidden fields must be absent on the wire.
+	for _, k := range []string{"chain_id", "address", "payload", "protocol_id", "registration_variant", "block_number", "deltas"} {
+		if _, present := cap.body[k]; present {
+			t.Errorf("SIGNING_POLICY body should omit %q, got %+v", k, cap.body)
+		}
+	}
+}
+
+func TestSignFspMessageVoterRegistration(t *testing.T) {
+	addr := "0x" + repeat("ab", 20)
+	t.Run("legacy", func(t *testing.T) {
+		c, cap := newServer(t, 200, `{"message_hash":"0xmh","v":27,"r":"0xr","s":"0xs","signature":"0xsig"}`)
+		variant := RegistrationVariantLegacy
+		_, err := c.SignFspMessage(context.Background(), SignFspMessageRequest{
+			Wallet: "fsp", MessageType: MessageTypeVoterRegistration, RewardEpochID: 1,
+			Address: &addr, RegistrationVariant: &variant,
+		}, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cap.body["address"] != addr || cap.body["registration_variant"] != "legacy" {
+			t.Errorf("legacy body wrong: %+v", cap.body)
+		}
+		if _, present := cap.body["chain_id"]; present {
+			t.Errorf("legacy must omit chain_id, got %+v", cap.body)
+		}
+	})
+	t.Run("chain_scoped", func(t *testing.T) {
+		c, cap := newServer(t, 200, `{"message_hash":"0xmh","v":27,"r":"0xr","s":"0xs","signature":"0xsig"}`)
+		variant := RegistrationVariantChainScoped
+		chainID := 14
+		_, err := c.SignFspMessage(context.Background(), SignFspMessageRequest{
+			Wallet: "fsp", MessageType: MessageTypeVoterRegistration, RewardEpochID: 1,
+			Address: &addr, RegistrationVariant: &variant, ChainID: &chainID,
+		}, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cap.body["registration_variant"] != "chain_scoped" || cap.body["chain_id"].(float64) != 14 {
+			t.Errorf("chain_scoped body wrong: %+v", cap.body)
+		}
+	})
+}
+
+func TestSignFspMessageProtocolPayload(t *testing.T) {
+	c, cap := newServer(t, 200, `{"message_hash":"0xmh","v":27,"r":"0xr","s":"0xs","signature":"0xsig"}`)
+	payload := "0xdeadbeef"
+	pid := 200
+	_, err := c.SignFspMessage(context.Background(), SignFspMessageRequest{
+		Wallet: "fsp", MessageType: MessageTypeProtocolPayload, RewardEpochID: 1,
+		Payload: &payload, ProtocolID: &pid,
+	}, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cap.body["payload"] != payload || cap.body["protocol_id"].(float64) != 200 {
+		t.Errorf("PROTOCOL_PAYLOAD body wrong: %+v", cap.body)
+	}
+	// protocol_id is optional — a payload-only request is valid and omits it.
+	c2, cap2 := newServer(t, 200, `{"message_hash":"0xmh","v":27,"r":"0xr","s":"0xs","signature":"0xsig"}`)
+	_, err = c2.SignFspMessage(context.Background(), SignFspMessageRequest{
+		Wallet: "fsp", MessageType: MessageTypeProtocolPayload, RewardEpochID: 1, Payload: &payload,
+	}, "")
+	if err != nil {
+		t.Fatalf("payload-only should be valid: %v", err)
+	}
+	if _, present := cap2.body["protocol_id"]; present {
+		t.Errorf("payload-only must omit protocol_id, got %+v", cap2.body)
+	}
+}
+
+func TestSignFspMessageFastUpdate(t *testing.T) {
+	c, cap := newServer(t, 200, `{"message_hash":"0xmh","v":27,"r":"0xr","s":"0xs","signature":"0xsig"}`)
+	deltas := "0x00ff"
+	// A uint256 value that overflows uint64, proving *big.Int carries full width.
+	big1, _ := new(big.Int).SetString("123456789012345678901234567890", 10)
+	_, err := c.SignFspMessage(context.Background(), SignFspMessageRequest{
+		Wallet: "fsp", MessageType: MessageTypeFastUpdate, RewardEpochID: 1,
+		BlockNumber: big.NewInt(42), Replicate: big.NewInt(1),
+		GammaX: big1, GammaY: big.NewInt(2), C: big.NewInt(3), S: big.NewInt(4),
+		Deltas: &deltas,
+	}, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cap.body["message_type"] != "FAST_UPDATE" || cap.body["deltas"] != "0x00ff" {
+		t.Errorf("FAST_UPDATE body wrong: %+v", cap.body)
+	}
+	// The uint256 gamma_x must survive as the exact JSON number (no float clip).
+	if got := numFromRaw(t, cap.bodyRaw, "gamma_x"); got != "123456789012345678901234567890" {
+		t.Errorf("gamma_x lost precision: got %s", got)
+	}
+	if numFromRaw(t, cap.bodyRaw, "block_number") != "42" {
+		t.Errorf("block_number wrong: %+v", cap.body)
+	}
+}
+
 func TestSignFspMessageValidationPreHTTP(t *testing.T) {
 	c, cap := newServer(t, 500, `should-not-be-hit`)
 	chainID := 19
 	bad := "0xnothex"
+	badAddr := "0x123"
+	okAddr := "0x" + repeat("ab", 20)
+	sp := "0x" + repeat("ab", 40)
+	payload := "0xdead"
+	deltas := "0x00"
+	legacy := RegistrationVariantLegacy
+	scoped := RegistrationVariantChainScoped
 	tests := []struct {
 		name string
 		req  SignFspMessageRequest
 	}{
 		{"uptime with rd field", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeUptime, RewardEpochID: 1, ChainID: &chainID}},
+		{"uptime with payload", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeUptime, RewardEpochID: 1, Payload: &payload}},
 		{"rewards missing fields", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeRewards, RewardEpochID: 1}},
 		{"rewards bad hash", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeRewards, RewardEpochID: 1, ChainID: &chainID, NoOfWeightBasedClaims: ptrInt(1), RewardsHash: &bad}},
+		{"rewards with payload", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeRewards, RewardEpochID: 1, ChainID: &chainID, NoOfWeightBasedClaims: ptrInt(1), RewardsHash: ptrHex32(), Payload: &payload}},
+		{"signing_policy missing", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeSigningPolicy, RewardEpochID: 1}},
+		{"signing_policy with chain_id", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeSigningPolicy, RewardEpochID: 1, SigningPolicy: &sp, ChainID: &chainID}},
+		{"voter_reg missing address", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeVoterRegistration, RewardEpochID: 1, RegistrationVariant: &legacy}},
+		{"voter_reg bad address", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeVoterRegistration, RewardEpochID: 1, Address: &badAddr, RegistrationVariant: &legacy}},
+		{"voter_reg missing variant", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeVoterRegistration, RewardEpochID: 1, Address: &okAddr}},
+		{"voter_reg scoped missing chain_id", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeVoterRegistration, RewardEpochID: 1, Address: &okAddr, RegistrationVariant: &scoped}},
+		{"voter_reg legacy with chain_id", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeVoterRegistration, RewardEpochID: 1, Address: &okAddr, RegistrationVariant: &legacy, ChainID: &chainID}},
+		{"protocol_payload missing", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeProtocolPayload, RewardEpochID: 1}},
+		{"protocol_payload with address", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeProtocolPayload, RewardEpochID: 1, Payload: &payload, Address: &okAddr}},
+		{"fast_update missing fields", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeFastUpdate, RewardEpochID: 1, BlockNumber: big.NewInt(1)}},
+		{"fast_update with reward field", SignFspMessageRequest{Wallet: "w", MessageType: MessageTypeFastUpdate, RewardEpochID: 1, BlockNumber: big.NewInt(1), Replicate: big.NewInt(1), GammaX: big.NewInt(1), GammaY: big.NewInt(1), C: big.NewInt(1), S: big.NewInt(1), Deltas: &deltas, RewardsHash: ptrHex32()}},
 		{"unknown type", SignFspMessageRequest{Wallet: "w", MessageType: "BOGUS", RewardEpochID: 1}},
 	}
 	for _, tc := range tests {
@@ -258,6 +390,25 @@ func TestTransportErrorRetryable(t *testing.T) {
 // --- tiny helpers (avoid extra imports) ---
 
 func ptrInt(n int) *int { return &n }
+
+func ptrHex32() *string { s := "0x" + repeat("ab", 32); return &s }
+
+// numFromRaw decodes raw JSON with UseNumber (no float clipping) and returns the
+// named top-level numeric field as its exact string form.
+func numFromRaw(t *testing.T, raw []byte, key string) string {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	n, ok := m[key].(json.Number)
+	if !ok {
+		t.Fatalf("field %q is not a json.Number: %v", key, m[key])
+	}
+	return n.String()
+}
 
 func repeat(s string, n int) string {
 	out := make([]byte, 0, len(s)*n)
